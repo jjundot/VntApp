@@ -908,6 +908,14 @@ public final class MainActivity extends AppCompatActivity {
                 "no".equalsIgnoreCase(config.optString("device_mode", "tun").trim()));
 
         LinearLayout transport = section(form, "传输优化", false);
+        fieldLabel(transport, "带宽感知中继（实验）",
+                "仅观察会学习持续上传/下载需求并记录建议；自动模式在持续拥塞且目标有余量时迁移，包含冷却机制。需要服务器启用带宽统计及迁移支持；修改后重新连接生效。");
+        Spinner bandwidthMode = new Spinner(this);
+        bandwidthMode.setAdapter(spinnerAdapter(new String[]{"关闭（默认）", "仅观察", "自动迁移"}));
+        String savedBandwidthMode = config.optString("bandwidth_mode", "off");
+        bandwidthMode.setSelection("observe".equals(savedBandwidthMode) ? 1
+                : "auto".equals(savedBandwidthMode) ? 2 : 0);
+        transport.addView(spinnerBox(bandwidthMode), top(8));
         CheckBox rtx = toggle(transport, "QUIC 传输优化", "降低丢包，延迟可能有波动",
                 "使用带重传能力的增强通道，适合文件传输和远程桌面。", config.optBoolean("rtx"));
         CheckBox fec = toggle(transport, "FEC 前向纠错", "消耗额外带宽换取稳定性",
@@ -999,6 +1007,7 @@ public final class MainActivity extends AppCompatActivity {
                 "由 VNTS 签发。启动时通过链接获取最新配置，并在可靠连接验证成功后接收实时更新；链接包含接入凭据，请像密码一样保管。");
         subscription.setSingleLine(false);
         subscription.setMinLines(4);
+        notice(subscriptionSection, "带宽感知模式由订阅服务端下发；Android DNS 仍使用本地设置。", textMuted());
         Button testSubscription = ghost("测试");
         subscriptionSection.addView(testSubscription, top(10));
         TextView subscriptionPreview = text("", 12, false, textBody());
@@ -1113,6 +1122,8 @@ public final class MainActivity extends AppCompatActivity {
                         subnetMappings.joined(), autoSyncSubnet.isChecked(), certValue,
                         tunnelPort.getText().toString(), portMappings.joined(), allowMapping.isChecked(), udpStuns.joined(), tcpStuns.joined());
                 if (existing != null) profile = profile.withId(existing.id);
+                profile = profile.withBandwidthMode(new String[]{"off", "observe", "auto"}[
+                        bandwidthMode.getSelectedItemPosition()]);
                 store.save(profile.withDns(new VpnDnsSettings(
                         takeOverDns.isChecked(), dnsServers.getText().toString())));
                 dialog.dismiss();

@@ -8,6 +8,15 @@ import static org.junit.Assert.assertTrue;
 import org.junit.Test;
 
 public class SubscriptionConfigTest {
+    @Test public void runtimeKeepsManagedBandwidthMode() throws Exception {
+        org.json.JSONObject remote = new org.json.JSONObject()
+                .put("network_code", "team").put("bandwidth_mode", "observe");
+        org.json.JSONObject runtime = SubscriptionConfig.runtime(
+                remote, "vnt2://join/2/example", SubscriptionConfig.newInstanceId());
+        assertEquals("observe", runtime.getString("bandwidth_mode"));
+        assertFalse(runtime.has("vpn_dns_servers"));
+    }
+
     @Test public void instanceIdIsStableShapeAndRandom() {
         String first = SubscriptionConfig.newInstanceId();
         String second = SubscriptionConfig.newInstanceId();

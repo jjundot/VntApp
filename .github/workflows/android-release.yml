@@ -11,7 +11,7 @@ on:
         required: true
         type: string
       vnt_tag:
-        description: Preferred vnt-dev/vnt tag; falls back to the latest release
+        description: Exact jjundot/vnt release tag (defaults to the app tag)
         required: false
         type: string
 
@@ -23,7 +23,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  VNT_REPOSITORY: vnt-dev/vnt
+  VNT_REPOSITORY: jjundot/vnt
 
 jobs:
   metadata:
@@ -55,16 +55,11 @@ jobs:
               exit 2
             }
           done
-          if gh release view "$requested_vnt_tag" --repo "$VNT_REPOSITORY" >/dev/null 2>&1; then
-            vnt_tag="$requested_vnt_tag"
-          else
-            echo "VNT release $requested_vnt_tag was not found; using the latest release"
-            vnt_tag="$(gh release view --repo "$VNT_REPOSITORY" --json tagName --jq .tagName)"
-            [[ -n "$vnt_tag" ]] || {
-              echo "No VNT release is available" >&2
-              exit 3
-            }
-          fi
+          gh release view "$requested_vnt_tag" --repo "$VNT_REPOSITORY" >/dev/null || {
+            echo "Required VNT release $requested_vnt_tag is missing in $VNT_REPOSITORY"
+            exit 3
+          }
+          vnt_tag="$requested_vnt_tag"
           version_name="${app_tag#v}"
           {
             echo "app_tag=$app_tag"

@@ -49,6 +49,7 @@ VNT 运行期间会显示常驻通知。可以从应用内停止组网。
 | 设备名称 | 当前手机在虚拟网络中显示的名称 |
 | 自定义虚拟 IP | 可选；留空时由服务器分配 |
 | MTU | 默认值适用于大多数网络，遇到特殊网络问题时再调整 |
+| 带宽感知中继（实验） | 手动模式下在“传输优化”选择关闭、仅观察或自动迁移，默认关闭；订阅模式由服务端下发 `bandwidth_mode` |
 | 出栈网段 | 需要通过 VNT 转发的目标网段，可配置多个 |
 | VPN 接管 DNS | 默认开启；留空使用 `8.8.8.8`、`1.1.1.1`，支持自定义 IPv4 DNS；为所选 DNS 添加 VPN 主机路由 |
 | 自动同步节点子网 | 自动获取其他在线节点公布的出口网段并更新 Android VPN 路由，默认关闭 |
@@ -112,11 +113,17 @@ Android 同一时间通常只能启用一个 VPN 服务。启动 VNT 前，请�
 
 生成的调试安装包位于 `app/build/outputs/apk/debug/`。
 
-推送 tag 后，GitHub Actions 会自动构建并发布三个架构的签名 APK。构建时优先使用 VNT 核心仓库的同名 Release；找不到同名版本时使用 latest Release。
+推送 tag 后，GitHub Actions 会自动构建并发布三个架构及通用的签名 APK。核心库来自 `jjundot/vnt` 的同名 Release；手动触发时可以指定 `vnt_tag`。要求指定版本存在并通过 SHA-256 校验，缺少时构建失败，避免使用不匹配的核心。
+
+### 带宽感知实验构建
+
+本分支基于 DNS feature 提交 `f82071a`，保留 DNS 接管及其本地存储。带宽调度需要对应的 `jjundot/vnt` / `jjundot/vnts` 实验实现：入口、出口分开计量，学习持续上下行需求，并在目标余量、持续拥塞和冷却条件满足时迁移。仅观察模式记录建议，不提交迁移；自动迁移还需要服务端允许。订阅下发的 `bandwidth_mode` 同样支持 `off`、`observe`、`auto`，修改后由核心重建实例。
+
+本地构建先将实验 JNI 库放入 `app/src/main/jniLibs/{arm64-v8a,armeabi-v7a,x86_64}/libvnt_jni.so`，或使用 `scripts/build-android-jni.sh` 并设置 `VNT_DIR`、`APP_DIR`、`NDK_HOME`、`TARGET_DIR`。然后运行 `./gradlew testDebugUnitTest lintDebug assembleDebug -PvntCoreTag=<核心提交>`。JNI 库不纳入 Git；发布时应先在 fork 的核心仓库发布包含对应 ABI 库和校验文件的版本。该实验尚未经过 Android 真机网络和持续拥塞迁移验证。
 
 ## 相关项目
 
-- VNT 核心项目：<https://github.com/vnt-dev/vnt>
+- VNT 核心 fork：<https://github.com/jjundot/vnt>
 
 ## 许可证
 

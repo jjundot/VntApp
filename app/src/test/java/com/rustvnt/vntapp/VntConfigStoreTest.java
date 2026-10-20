@@ -8,6 +8,38 @@ import org.junit.Test;
 import org.json.JSONObject;
 
 public class VntConfigStoreTest {
+    @Test public void bandwidthModeAndDnsSurviveEditingAndStorage() throws Exception {
+        for (String mode : java.util.List.of("off", "observe", "auto")) {
+            VntConfigStore.Profile original = new VntConfigStore.Profile(
+                    "id", "name", "{\"network_code\":\"team\",\"mtu\":1380}")
+                    .withDns(new VpnDnsSettings(true, "10.26.0.3"));
+            VntConfigStore.Profile restored = VntConfigStore.Profile.fromStorage(
+                    original.withBandwidthMode(mode).withId("updated").toStorage());
+            assertEquals(mode, restored.config().getString("bandwidth_mode"));
+            assertEquals("team", restored.config().getString("network_code"));
+            assertEquals(1380, restored.config().getInt("mtu"));
+            assertEquals("10.26.0.3", restored.dns.customServers);
+            assertTrue(restored.dns.enabled);
+            assertEquals("updated", restored.id);
+        }
+    }
+
+    @Test public void bandwidthModeCannotOverrideSubscriptionPolicy() throws Exception {
+        VntConfigStore.Profile profile = VntConfigStore.Profile.createSubscription(
+                "name", "vnt2://join/2/example", null);
+        try {
+            profile.withBandwidthMode("auto");
+            fail("Expected subscription policy to remain managed");
+        } catch (IllegalArgumentException expected) {
+            assertEquals("订阅配置的带宽模式由服务端管理", expected.getMessage());
+        }
+    }
+
+    @Test(expected = IllegalArgumentException.class)
+    public void rejectsUnknownBandwidthMode() throws Exception {
+        new VntConfigStore.Profile("id", "name", "{}").withBandwidthMode("automatic");
+    }
+
     @Test public void existingProfilesDefaultToDnsTakeover() throws Exception {
         VntConfigStore.Profile profile = VntConfigStore.Profile.fromStorage(
                 new JSONObject().put("id", "old").put("name", "旧配置").put("json", "{}"));

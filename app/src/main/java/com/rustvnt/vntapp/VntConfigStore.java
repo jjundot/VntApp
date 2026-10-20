@@ -211,6 +211,18 @@ final class VntConfigStore {
             return new Profile(id, name, json, mode, subscription, settings);
         }
 
+        Profile withBandwidthMode(String bandwidthMode) throws Exception {
+            if (isSubscription()) {
+                throw new IllegalArgumentException("订阅配置的带宽模式由服务端管理");
+            }
+            if (!List.of("off", "observe", "auto").contains(bandwidthMode)) {
+                throw new IllegalArgumentException("无效带宽模式");
+            }
+            JSONObject config = config();
+            config.put("bandwidth_mode", bandwidthMode);
+            return new Profile(id, name, config.toString(), mode, subscription, dns);
+        }
+
         boolean isSubscription() { return MODE_SUBSCRIPTION.equals(mode); }
 
         JSONObject config() {
