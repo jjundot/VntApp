@@ -1047,6 +1047,17 @@ public final class MainActivity extends AppCompatActivity {
         pages.addView(subscriptionScroll, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
         LinearLayout root = column();
+        LinearLayout dnsSection = section(root, "Android DNS", false);
+        VpnDnsSettings savedDns = existing == null ? VpnDnsSettings.DEFAULT : existing.dns;
+        CheckBox takeOverDns = toggle(dnsSection, "VPN 接管 DNS", "通过 VNT 解析系统域名，默认开启",
+                "DNS 流量进入 VPN。公网或其他子网的 DNS 需有 VNT 子网出口；关闭后使用系统 DNS。无网卡模式不生效。",
+                savedDns.enabled);
+        EditText dnsServers = field(dnsSection, "自定义 DNS 服务器", savedDns.customServers, false,
+                "留空使用 8.8.8.8、1.1.1.1",
+                "仅支持 IPv4，多个地址用逗号、空格或换行分隔。填写后替换默认 DNS；需能从 VNT 网络访问。保存后下次连接生效。");
+        dnsServers.setSingleLine(false);
+        dnsServers.setEnabled(takeOverDns.isChecked());
+        takeOverDns.setOnCheckedChangeListener((button, checked) -> dnsServers.setEnabled(checked));
         LinearLayout tabs = row();
         tabs.setPadding(dp(14), dp(8), dp(14), dp(4));
         Button manualTab = ghost("手动配置");
@@ -1076,7 +1087,8 @@ public final class MainActivity extends AppCompatActivity {
                 if (subscriptionMode[0]) {
                     VntConfigStore.Profile profile = VntConfigStore.Profile.createSubscription(
                             subscriptionName.getText().toString(), subscription.getText().toString(), existing);
-                    store.save(profile);
+                    store.save(profile.withDns(new VpnDnsSettings(
+                            takeOverDns.isChecked(), dnsServers.getText().toString())));
                     dialog.dismiss();
                     render();
                     return;
@@ -1101,7 +1113,8 @@ public final class MainActivity extends AppCompatActivity {
                         subnetMappings.joined(), autoSyncSubnet.isChecked(), certValue,
                         tunnelPort.getText().toString(), portMappings.joined(), allowMapping.isChecked(), udpStuns.joined(), tcpStuns.joined());
                 if (existing != null) profile = profile.withId(existing.id);
-                store.save(profile);
+                store.save(profile.withDns(new VpnDnsSettings(
+                        takeOverDns.isChecked(), dnsServers.getText().toString())));
                 dialog.dismiss();
                 render();
             } catch (Exception error) { toast(error.getMessage() == null ? "配置内容无效" : error.getMessage()); }

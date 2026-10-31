@@ -78,17 +78,24 @@ final class VntConfigStore {
         final String json;
         final String mode;
         final String subscription;
+        final VpnDnsSettings dns;
 
         Profile(String id, String name, String json) {
             this(id, name, json, MODE_MANUAL, "");
         }
 
         Profile(String id, String name, String json, String mode, String subscription) {
+            this(id, name, json, mode, subscription, VpnDnsSettings.DEFAULT);
+        }
+
+        Profile(String id, String name, String json, String mode, String subscription,
+                VpnDnsSettings dns) {
             this.id = id;
             this.name = name;
             this.json = json;
             this.mode = MODE_SUBSCRIPTION.equals(mode) ? MODE_SUBSCRIPTION : MODE_MANUAL;
             this.subscription = subscription == null ? "" : subscription;
+            this.dns = dns;
         }
 
         static Profile createSubscription(String name, String subscription, Profile existing) {
@@ -98,7 +105,8 @@ final class VntConfigStore {
             }
             String title = name == null || name.trim().isEmpty() ? "订阅配置" : name.trim();
             String id = existing == null ? UUID.randomUUID().toString() : existing.id;
-            return new Profile(id, title, "{}", MODE_SUBSCRIPTION, value);
+            return new Profile(id, title, "{}", MODE_SUBSCRIPTION, value,
+                    existing == null ? VpnDnsSettings.DEFAULT : existing.dns);
         }
 
         static Profile create(String name, String server, String code, String password,
@@ -196,7 +204,12 @@ final class VntConfigStore {
                     "skip", "", "", false, "", "");
         }
 
-        Profile withId(String existingId) { return new Profile(existingId, name, json, mode, subscription); }
+        Profile withId(String existingId) { return new Profile(existingId, name, json, mode, subscription, dns); }
+
+        Profile withDns(VpnDnsSettings settings) {
+            settings.servers(); // Validate before persisting an enabled configuration.
+            return new Profile(id, name, json, mode, subscription, settings);
+        }
 
         boolean isSubscription() { return MODE_SUBSCRIPTION.equals(mode); }
 
@@ -206,7 +219,9 @@ final class VntConfigStore {
 
         JSONObject toStorage() {
             try {
-                JSONObject value = new JSONObject().put("id", id).put("name", name).put("mode", mode);
+                JSONObject value = new JSONObject().put("id", id).put("name", name).put("mode", mode)
+                        .put("vpn_dns_enabled", dns.enabled)
+                        .put("vpn_dns_servers", dns.customServers);
                 if (isSubscription()) {
                     value.put("subscription", subscription);
                 } else {
@@ -220,7 +235,9 @@ final class VntConfigStore {
         static Profile fromStorage(JSONObject value) {
             String mode = value.optString("mode", MODE_MANUAL);
             return new Profile(value.optString("id"), value.optString("name"),
-                    value.optString("json", "{}"), mode, value.optString("subscription"));
+                    value.optString("json", "{}"), mode, value.optString("subscription"),
+                    new VpnDnsSettings(value.optBoolean("vpn_dns_enabled", true),
+                            value.optString("vpn_dns_servers", "")));
         }
     }
 }

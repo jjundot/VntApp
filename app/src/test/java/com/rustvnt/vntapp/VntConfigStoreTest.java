@@ -5,8 +5,40 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
 
 import org.junit.Test;
+import org.json.JSONObject;
 
 public class VntConfigStoreTest {
+    @Test public void existingProfilesDefaultToDnsTakeover() throws Exception {
+        VntConfigStore.Profile profile = VntConfigStore.Profile.fromStorage(
+                new JSONObject().put("id", "old").put("name", "旧配置").put("json", "{}"));
+        assertTrue(profile.dns.enabled);
+        assertEquals(java.util.List.of("8.8.8.8", "1.1.1.1"), profile.dns.servers());
+    }
+
+    @Test public void dnsSettingsRoundTripForManualAndSubscriptionProfiles() throws Exception {
+        for (String mode : java.util.List.of("manual", "subscription")) {
+            VntConfigStore.Profile profile = new VntConfigStore.Profile(
+                    "id", "name", "{}", mode, "vnt2://join/2/example")
+                    .withDns(new VpnDnsSettings(false, "10.26.0.3"));
+            VntConfigStore.Profile restored = VntConfigStore.Profile.fromStorage(profile.toStorage());
+            org.junit.Assert.assertFalse(restored.dns.enabled);
+            assertEquals("10.26.0.3", restored.dns.customServers);
+            assertEquals(mode, restored.mode);
+            assertEquals("{}", restored.json);
+        }
+    }
+
+    @Test public void changingSubscriptionAndIdentityKeepsLocalDnsSettings() {
+        VntConfigStore.Profile profile = VntConfigStore.Profile.createSubscription(
+                "name", "vnt2://join/2/old", null)
+                .withDns(new VpnDnsSettings(true, "10.26.0.3"));
+        VntConfigStore.Profile updated = VntConfigStore.Profile.createSubscription(
+                "renamed", "vnt2://join/2/new", profile).withId("replacement");
+        assertEquals("10.26.0.3", updated.dns.customServers);
+        assertEquals("{}", updated.json);
+        org.junit.Assert.assertFalse(updated.toStorage().has("json"));
+    }
+
     @Test public void allowsOneServerWithoutExplicitIp() throws Exception {
         validate("quic://vpn.example.com:29872", "");
     }

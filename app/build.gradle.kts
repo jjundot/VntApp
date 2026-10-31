@@ -51,6 +51,7 @@ dependencies {
     implementation(libs.androidx.drawerlayout)
     implementation(libs.zxing.android.embedded)
     testImplementation(libs.junit)
+    testImplementation(libs.json)
     androidTestImplementation(libs.androidx.espresso.core)
     androidTestImplementation(libs.androidx.junit)
 }

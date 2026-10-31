@@ -60,6 +60,7 @@ public final class VntVpnService extends VpnService {
     private volatile boolean tunActive;
     private long runtimeGeneration;
     private String activeProfileName;
+    private volatile VpnDnsSettings activeDns = VpnDnsSettings.DEFAULT;
     private String activeConfigJson;
     private boolean activeAllowIkev2;
     private String activeIp;
@@ -103,6 +104,8 @@ public final class VntVpnService extends VpnService {
                 .putExtra("name", profile.name)
                 .putExtra("json", profile.json)
                 .putExtra("subscription", profile.subscription)
+                .putExtra("vpn_dns_enabled", profile.dns.enabled)
+                .putExtra("vpn_dns_servers", profile.dns.customServers)
                 .putExtra("prefetched_subscription_config", prefetchedSubscriptionConfig);
         ContextCompat.startForegroundService(context, intent);
     }
@@ -129,7 +132,9 @@ public final class VntVpnService extends VpnService {
                 String subscription = active.getString("subscription", "");
                 String instanceId = active.getString("subscription_instance_id", "");
                 startForeground(NOTIFICATION_ID, notification("正在恢复虚拟网络…", false));
-                worker.execute(() -> connect(id, name, json, subscription, instanceId, null));
+                VpnDnsSettings dns = new VpnDnsSettings(active.getBoolean("vpn_dns_enabled", true),
+                        active.getString("vpn_dns_servers", ""));
+                worker.execute(() -> connect(id, name, json, subscription, instanceId, null, dns));
             }
             return START_STICKY;
         }
@@ -150,21 +155,26 @@ public final class VntVpnService extends VpnService {
                     "prefetched_subscription_config");
             String instanceId = subscription == null || subscription.isBlank()
                     ? "" : SubscriptionConfig.newInstanceId();
+            VpnDnsSettings dns = new VpnDnsSettings(intent.getBooleanExtra("vpn_dns_enabled", true),
+                    intent.getStringExtra("vpn_dns_servers"));
             cancellationRequested = false;
             getSharedPreferences(ACTIVE_PREFS, MODE_PRIVATE).edit()
                     .putString("id", id).putString("name", name).putString("json", json)
                     .putString("subscription", subscription == null ? "" : subscription)
-                    .putString("subscription_instance_id", instanceId).apply();
+                    .putString("subscription_instance_id", instanceId)
+                    .putBoolean("vpn_dns_enabled", dns.enabled)
+                    .putString("vpn_dns_servers", dns.customServers).apply();
             startForeground(NOTIFICATION_ID, notification("正在建立虚拟网络…", false));
             worker.execute(() -> connect(id, name, json, subscription, instanceId,
-                    prefetchedSubscriptionConfig));
+                    prefetchedSubscriptionConfig, dns));
         }
         return START_STICKY;
     }
 
     private void connect(String id, String name, String json, String subscription,
-                         String instanceId, String prefetchedSubscriptionConfig) {
+                         String instanceId, String prefetchedSubscriptionConfig, VpnDnsSettings dns) {
         cleanupNative();
+        activeDns = dns;
         activeProfileId = id;
         activeProfileName = name;
         activeSubscription = subscription == null || subscription.isBlank() ? null : subscription;
@@ -174,6 +184,7 @@ public final class VntVpnService extends VpnService {
                 "正在连接服务器并注册网络…", activeAllowIkev2,
                 null, null, null, null, null));
         try {
+            activeDns.servers();
             if (!VntManager.init()) throw new IllegalStateException("Rust 核心初始化失败");
             if (activeSubscription != null) {
                 // 预取只用于尽早暴露服务端策略与设备模式；正式启动时 native 会
@@ -456,6 +467,7 @@ public final class VntVpnService extends VpnService {
                 arrayStrings(config.optJSONArray("input")), activeSubnetRoutes)) {
             addRoute(builder, route.address(), route.prefix());
         }
+        configureDns(builder);
         return builder.establish();
     }
 
@@ -475,7 +487,17 @@ public final class VntVpnService extends VpnService {
         for (VpnRouteSet.Route route : VpnRouteSet.rebuild(ip, prefixLen, routes)) {
             addRoute(builder, route.address(), route.prefix());
         }
+        configureDns(builder);
         return builder.establish();
+    }
+
+    /** Applied on initial establishment and every route/subscription driven rebuild. */
+    private void configureDns(Builder builder) {
+        activeDns.apply(new VpnDnsSettings.Sink() {
+            @Override public void addDnsServer(String server) { builder.addDnsServer(server); }
+            // Both TCP and UDP follow the same host route through the native TUN.
+            @Override public void addRoute(String address, int prefix) { builder.addRoute(address, prefix); }
+        });
     }
 
     /** VPN 接口会话名：配置的 tun_name 优先，否则 "VNT · 配置名"。 */
@@ -574,6 +596,7 @@ public final class VntVpnService extends VpnService {
         try { VntManager.destroy(); } catch (Throwable ignored) { }
         activeProfileId = null;
         activeProfileName = null;
+        activeDns = VpnDnsSettings.DEFAULT;
         activeConfigJson = null;
         activeAllowIkev2 = false;
         activeSubscription = null;
