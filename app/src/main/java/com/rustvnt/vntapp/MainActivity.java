@@ -906,6 +906,41 @@ public final class MainActivity extends AppCompatActivity {
         CheckBox noTun = toggle(network, "无虚拟网卡", "不创建 Android VPN，仅使用端口映射等能力",
                 "TUN 可直接访问虚拟 IP；无网卡模式无需 VPN 权限，但不能启用 IKEv2 客户端互通。",
                 "no".equalsIgnoreCase(config.optString("device_mode", "tun").trim()));
+        VpnDnsSettings savedDns = existing == null ? VpnDnsSettings.DEFAULT : existing.dns;
+        CheckBox takeOverDns = toggle(network, "VPN 接管 DNS", "通过 VNT 解析系统域名，默认开启",
+                "DNS 流量进入 VPN。公网或其他子网的 DNS 需有 VNT 子网出口；关闭后使用系统 DNS。无网卡模式不生效。",
+                savedDns.enabled);
+        EditText dnsServers = field(network, "自定义 DNS 服务器", savedDns.customServers, false,
+                "留空使用 8.8.8.8、1.1.1.1",
+                "仅支持 IPv4，多个地址用逗号、空格或换行分隔。填写后替换默认 DNS；需能从 VNT 网络访问。保存后下次连接生效。");
+        dnsServers.setSingleLine(false);
+        dnsServers.setEnabled(takeOverDns.isChecked());
+        takeOverDns.setOnCheckedChangeListener((button, checked) -> dnsServers.setEnabled(checked));
+        WifiSubnet.Cidr detectedWifi = WifiSubnet.detect(this);
+        String wifiHint = detectedWifi == null
+                ? "当前未检测到 Wi‑Fi IPv4 子网；连接 Wi‑Fi 后启动时再尝试注入。"
+                : ("当前检测到 " + detectedWifi.value()
+                    + "。开启后启动时把它并入出栈网段，让其他节点经本机访问该局域网；"
+                    + "依赖 VNT 内置 NAT，不能把手机变成 Wi‑Fi 的系统网关。");
+        CheckBox advertiseWifiSubnet = toggle(network, "公布本机 Wi‑Fi 子网", "无 root：点对网出口自动公布 Wi‑Fi 网段",
+                wifiHint, config.optBoolean("advertise_wifi_subnet"));
+        boolean rooted = RootAccess.isPresent();
+        String rootHint = rooted
+                ? "检测到 su。开启后启动时会请求 root，启用内核转发与 iptables NAT，并关闭 VNT 内置 NAT。"
+                  + "这不会自动把同一 Wi‑Fi 上其他设备的默认网关改成手机。"
+                : "需要 root（Magisk/su）。当前设备未检测到 su，选项已置灰。无 root 请用「公布本机 Wi‑Fi 子网」。";
+        CheckBox systemWifiGateway = toggle(network, "系统级 Wi‑Fi 子网接管", "需 root：内核转发 + NAT",
+                rootHint, rooted && config.optBoolean("system_wifi_gateway"), rooted);
+        if (rooted) {
+            systemWifiGateway.setOnCheckedChangeListener((button, checked) -> {
+                if (checked) advertiseWifiSubnet.setChecked(true);
+            });
+        }
+        notice(network,
+                detectedWifi == null
+                        ? "Wi‑Fi 子网出口：未检测到当前 Wi‑Fi；可先连上 Wi‑Fi 再开上面两项。"
+                        : ("Wi‑Fi 子网出口：已检测到 " + detectedWifi.value() + "。"),
+                INDIGO);
 
         LinearLayout transport = section(form, "传输优化", false);
         CheckBox rtx = toggle(transport, "QUIC 传输优化", "降低丢包，延迟可能有波动",
@@ -1005,6 +1040,40 @@ public final class MainActivity extends AppCompatActivity {
         subscriptionPreview.setTextIsSelectable(true);
         subscriptionPreview.setVisibility(View.GONE);
         subscriptionSection.addView(subscriptionPreview, top(10));
+        LinearLayout subNetwork = section(subscriptionForm, "网络设置", false);
+        CheckBox takeOverDnsSub = toggle(subNetwork, "VPN 接管 DNS", "通过 VNT 解析系统域名，默认开启",
+                "与手动配置共用本地 DNS 设置；关闭后使用系统 DNS。无网卡模式不生效。",
+                savedDns.enabled);
+        EditText dnsServersSub = field(subNetwork, "自定义 DNS 服务器", savedDns.customServers, false,
+                "留空使用 8.8.8.8、1.1.1.1",
+                "仅支持 IPv4；与手动配置页同步。");
+        dnsServersSub.setSingleLine(false);
+        dnsServersSub.setEnabled(takeOverDnsSub.isChecked());
+        takeOverDnsSub.setOnCheckedChangeListener((button, checked) -> {
+            dnsServersSub.setEnabled(checked);
+            if (takeOverDns.isChecked() != checked) takeOverDns.setChecked(checked);
+        });
+        dnsServersSub.addTextChangedListener(new android.text.TextWatcher() {
+            @Override public void beforeTextChanged(CharSequence s, int a, int b, int c) {}
+            @Override public void onTextChanged(CharSequence s, int a, int b, int c) {}
+            @Override public void afterTextChanged(android.text.Editable s) {
+                if (!dnsServers.getText().toString().equals(s.toString()))
+                    dnsServers.setText(s);
+            }
+        });
+        takeOverDns.setOnCheckedChangeListener((button, checked) -> {
+            dnsServers.setEnabled(checked);
+            if (takeOverDnsSub.isChecked() != checked) takeOverDnsSub.setChecked(checked);
+        });
+        dnsServers.addTextChangedListener(new android.text.TextWatcher() {
+            @Override public void beforeTextChanged(CharSequence s, int a, int b, int c) {}
+            @Override public void onTextChanged(CharSequence s, int a, int b, int c) {}
+            @Override public void afterTextChanged(android.text.Editable s) {
+                if (!dnsServersSub.getText().toString().equals(s.toString()))
+                    dnsServersSub.setText(s);
+            }
+        });
+        notice(subNetwork, "订阅模式只在本机保存 DNS；Wi‑Fi 子网公布请用手动配置。", INDIGO);
         testSubscription.setOnClickListener(v -> {
             String value = subscription.getText().toString().trim();
             if (!value.startsWith("vnt2://join/2/")) { toast("订阅链接格式无效"); return; }
@@ -1047,17 +1116,6 @@ public final class MainActivity extends AppCompatActivity {
         pages.addView(subscriptionScroll, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
         LinearLayout root = column();
-        LinearLayout dnsSection = section(root, "Android DNS", false);
-        VpnDnsSettings savedDns = existing == null ? VpnDnsSettings.DEFAULT : existing.dns;
-        CheckBox takeOverDns = toggle(dnsSection, "VPN 接管 DNS", "通过 VNT 解析系统域名，默认开启",
-                "DNS 流量进入 VPN。公网或其他子网的 DNS 需有 VNT 子网出口；关闭后使用系统 DNS。无网卡模式不生效。",
-                savedDns.enabled);
-        EditText dnsServers = field(dnsSection, "自定义 DNS 服务器", savedDns.customServers, false,
-                "留空使用 8.8.8.8、1.1.1.1",
-                "仅支持 IPv4，多个地址用逗号、空格或换行分隔。填写后替换默认 DNS；需能从 VNT 网络访问。保存后下次连接生效。");
-        dnsServers.setSingleLine(false);
-        dnsServers.setEnabled(takeOverDns.isChecked());
-        takeOverDns.setOnCheckedChangeListener((button, checked) -> dnsServers.setEnabled(checked));
         LinearLayout tabs = row();
         tabs.setPadding(dp(14), dp(8), dp(14), dp(4));
         Button manualTab = ghost("手动配置");
@@ -1110,7 +1168,8 @@ public final class MainActivity extends AppCompatActivity {
                         device.getText().toString(), ip.getText().toString(), mtuValue, compress.isChecked(), rtx.isChecked(),
                         fec.isChecked(), noPunch.isChecked(), noBroadcast.isChecked(), allowIkev2.isChecked(), noTun.isChecked(),
                         peerAddresses.joined(), turns.joined(), punchModels.joined(), outputRoutes.joined(), inputRoutes.joined(),
-                        subnetMappings.joined(), autoSyncSubnet.isChecked(), certValue,
+                        subnetMappings.joined(), autoSyncSubnet.isChecked(), advertiseWifiSubnet.isChecked(),
+                        systemWifiGateway.isChecked(), certValue,
                         tunnelPort.getText().toString(), portMappings.joined(), allowMapping.isChecked(), udpStuns.joined(), tcpStuns.joined());
                 if (existing != null) profile = profile.withId(existing.id);
                 store.save(profile.withDns(new VpnDnsSettings(
@@ -1452,17 +1511,25 @@ public final class MainActivity extends AppCompatActivity {
     }
 
     private CheckBox toggle(LinearLayout form, String title, String description, String help, boolean checked) {
+        return toggle(form, title, description, help, checked, true);
+    }
+
+    private CheckBox toggle(LinearLayout form, String title, String description, String help,
+                            boolean checked, boolean enabled) {
         LinearLayout rowLayout = row();
         rowLayout.setGravity(Gravity.CENTER_VERTICAL);
         rowLayout.setPadding(dp(12), dp(10), dp(12), dp(10));
         rowLayout.setBackground(round(bgInput(), 9, border(), 1));
+        rowLayout.setAlpha(enabled ? 1f : 0.45f);
         LinearLayout texts = column();
         texts.addView(text(title, 14, true, textStrong()));
         texts.addView(text(description, 11, false, textMuted()), top(3));
         rowLayout.addView(texts, weighted());
         rowLayout.addView(configHelpButton(title, help), size(32, 32));
         CheckBox box = new CheckBox(this);
-        box.setChecked(checked);
+        box.setChecked(enabled && checked);
+        box.setEnabled(enabled);
+        rowLayout.setEnabled(enabled);
         rowLayout.addView(box);
         form.addView(rowLayout, top(9));
         return box;

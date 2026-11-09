@@ -114,7 +114,8 @@ final class VntConfigStore {
                               boolean rtx, boolean fec, boolean noPunch, boolean noBroadcast, boolean allowIkev2,
                               boolean noTun, String peerAddress, String turn, String punchModel,
                               String outputRoutes, String inputRoutes, String subnetMapping,
-                               boolean autoSyncSubnet, String certMode,
+                               boolean autoSyncSubnet, boolean advertiseWifiSubnet,
+                               boolean systemWifiGateway, String certMode,
                                String tunnelPort, String portMapping, boolean allowMapping,
                                String udpStun, String tcpStun) throws Exception {
             validateBasicConfig(server, code, ip);
@@ -139,6 +140,8 @@ final class VntConfigStore {
             config.put("allow_ikev2", allowIkev2);
             config.put("device_mode", noTun ? "no" : "tun");
             config.put("auto_sync_subnet", autoSyncSubnet);
+            config.put("advertise_wifi_subnet", advertiseWifiSubnet || systemWifiGateway);
+            config.put("system_wifi_gateway", systemWifiGateway);
             config.put("allow_mapping", allowMapping);
             config.put("cert_mode", certMode.trim().isEmpty() ? "skip" : certMode.trim());
             if (!tunnelPort.trim().isEmpty()) {

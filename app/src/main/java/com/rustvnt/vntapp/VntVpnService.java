@@ -243,7 +243,7 @@ public final class VntVpnService extends VpnService {
     }
 
     private void startResolvedInstance(String id, String name, String json) throws Exception {
-        json = useBuiltInNat(json);
+        json = applyWifiSubnetModes(json);
         activeConfigJson = json;
         JSONObject config = new JSONObject(json);
         activeSubnetRoutes = arrayStrings(config.optJSONArray("input"));
@@ -279,14 +279,39 @@ public final class VntVpnService extends VpnService {
         startRefreshing();
     }
 
-    private static String useBuiltInNat(String json) {
-        try {
-            JSONObject config = new JSONObject(json);
+    /**
+     * 模式 1：无 root，公布 Wi‑Fi 子网 + 内置 NAT。
+     * 模式 2：system_wifi_gateway，要求 root，改用系统转发/NAT（no_nat）。
+     */
+    private String applyWifiSubnetModes(String json) throws Exception {
+        JSONObject config = new JSONObject(json);
+        boolean systemGateway = config.optBoolean("system_wifi_gateway", false);
+        boolean advertise = config.optBoolean("advertise_wifi_subnet", false) || systemGateway;
+        if (systemGateway) {
+            if (!RootAccess.canExecute()) {
+                throw new IllegalStateException(
+                        "系统级 Wi‑Fi 子网接管需要 root。请授予 su 权限，或改用「公布本机 Wi‑Fi 子网」。");
+            }
+            SystemWifiGateway.enable();
+            config.put("no_nat", true);
+            advertise = true;
+        } else {
+            SystemWifiGateway.disableQuietly();
             config.remove("no_nat");
-            return config.toString();
-        } catch (Exception ignored) {
-            return json;
         }
+        if (advertise) {
+            WifiSubnet.Cidr wifi = WifiSubnet.detect(this);
+            if (wifi != null) {
+                List<String> merged = WifiSubnet.mergeIntoOutput(
+                        arrayStrings(config.optJSONArray("output")), wifi);
+                JSONArray output = new JSONArray();
+                for (String value : merged) output.put(value);
+                config.put("output", output);
+            } else if (systemGateway) {
+                throw new IllegalStateException("未检测到 Wi‑Fi IPv4 子网，无法启用系统级接管");
+            }
+        }
+        return config.toString();
     }
 
     /**
@@ -462,8 +487,8 @@ public final class VntVpnService extends VpnService {
                 .setMtu(clampMtu(config.optInt("mtu", DEFAULT_MTU)))
                 .addAddress(ip, prefixLen);
         builder.addDisallowedApplication(getPackageName());
+        // 出栈网段只交给 Rust 核心公布/NAT，不写入 Android VpnService 路由表
         for (VpnRouteSet.Route route : VpnRouteSet.build(ip, prefixLen,
-                arrayStrings(config.optJSONArray("output")),
                 arrayStrings(config.optJSONArray("input")), activeSubnetRoutes)) {
             addRoute(builder, route.address(), route.prefix());
         }
