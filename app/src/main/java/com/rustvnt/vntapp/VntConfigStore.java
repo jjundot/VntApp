@@ -114,9 +114,11 @@ final class VntConfigStore {
                               boolean rtx, boolean fec, boolean noPunch, boolean noBroadcast, boolean allowIkev2,
                               boolean noTun, String peerAddress, String turn, String punchModel,
                               String outputRoutes, String inputRoutes, String subnetMapping,
-                               boolean autoSyncSubnet, String certMode,
+                               boolean autoSyncSubnet, boolean advertiseWifiSubnet,
+                               boolean systemWifiGateway, String certMode,
                                String tunnelPort, String portMapping, boolean allowMapping,
-                               String udpStun, String tcpStun) throws Exception {
+                               String udpStun, String tcpStun,
+                               List<WifiSubnet.Selection> advertiseSubnets) throws Exception {
             validateBasicConfig(server, code, ip);
             validateMtu(mtu);
             JSONObject config = new JSONObject();
@@ -139,6 +141,9 @@ final class VntConfigStore {
             config.put("allow_ikev2", allowIkev2);
             config.put("device_mode", noTun ? "no" : "tun");
             config.put("auto_sync_subnet", autoSyncSubnet);
+            config.put("advertise_wifi_subnet", advertiseWifiSubnet || systemWifiGateway);
+            config.put("system_wifi_gateway", systemWifiGateway);
+            WifiSubnet.writeSelections(config, advertiseSubnets);
             config.put("allow_mapping", allowMapping);
             config.put("cert_mode", certMode.trim().isEmpty() ? "skip" : certMode.trim());
             if (!tunnelPort.trim().isEmpty()) {
@@ -200,8 +205,8 @@ final class VntConfigStore {
                                     boolean allowIkev2, String deviceId) throws Exception {
             return create(code, String.join("\n", servers), code, password, deviceId, Build.MODEL,
                     "", mtu, false, false, false, false, false, allowIkev2, false,
-                    "", "", "", "", "", "", false,
-                    "skip", "", "", false, "", "");
+                    "", "", "", "", "", "", false, false, false,
+                    "skip", "", "", false, "", "", null);
         }
 
         Profile withId(String existingId) { return new Profile(existingId, name, json, mode, subscription, dns); }

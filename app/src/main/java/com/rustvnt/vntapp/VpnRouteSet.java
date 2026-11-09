@@ -14,18 +14,28 @@ final class VpnRouteSet {
 
     private VpnRouteSet() {}
 
-    static List<Route> build(String ip, int prefixLen, List<String> outputRoutes,
-                             List<String> inputRoutes, List<String> syncedRoutes) {
+    /**
+     * Android VpnService 路由只应包含虚拟网段与入栈/同步到的远端出口网段。
+     * 本机「出栈」网段由 VNT 核心公布并做内置 NAT，不能 addRoute，否则会把本机
+     * 访问该物理局域网的流量吸进 TUN，破坏出口能力。
+     */
+    static List<Route> build(String ip, int prefixLen, List<String> inputRoutes,
+                             List<String> syncedRoutes) {
         LinkedHashMap<String, Route> routes = new LinkedHashMap<>();
         add(routes, ip + "/" + prefixLen);
-        for (String route : outputRoutes) add(routes, route);
         for (String route : inputRoutes) add(routes, route);
         for (String route : syncedRoutes) add(routes, route);
         return new ArrayList<>(routes.values());
     }
 
+    /** @deprecated 旧签名兼容；出栈参数会被忽略。 */
+    static List<Route> build(String ip, int prefixLen, List<String> outputRoutes,
+                             List<String> inputRoutes, List<String> syncedRoutes) {
+        return build(ip, prefixLen, inputRoutes, syncedRoutes);
+    }
+
     static List<Route> rebuild(String ip, int prefixLen, List<String> requestedRoutes) {
-        return build(ip, prefixLen, Collections.emptyList(), Collections.emptyList(), requestedRoutes);
+        return build(ip, prefixLen, Collections.emptyList(), requestedRoutes);
     }
 
     static Set<String> cidrs(List<String> routes) {
