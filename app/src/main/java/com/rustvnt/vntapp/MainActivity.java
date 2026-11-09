@@ -916,31 +916,42 @@ public final class MainActivity extends AppCompatActivity {
         dnsServers.setSingleLine(false);
         dnsServers.setEnabled(takeOverDns.isChecked());
         takeOverDns.setOnCheckedChangeListener((button, checked) -> dnsServers.setEnabled(checked));
-        WifiSubnet.Cidr detectedWifi = WifiSubnet.detect(this);
-        String wifiHint = detectedWifi == null
-                ? "当前未检测到 Wi‑Fi IPv4 子网；连接 Wi‑Fi 后启动时再尝试注入。"
-                : ("当前检测到 " + detectedWifi.value()
-                    + "。开启后启动时把它并入出栈网段，让其他节点经本机访问该局域网；"
-                    + "依赖 VNT 内置 NAT，不能把手机变成 Wi‑Fi 的系统网关。");
-        CheckBox advertiseWifiSubnet = toggle(network, "公布本机 Wi‑Fi 子网", "无 root：点对网出口自动公布 Wi‑Fi 网段",
-                wifiHint, config.optBoolean("advertise_wifi_subnet"));
+        CheckBox advertiseWifiSubnet = toggle(network, "公布本机子网", "无 root：把所选本机网段并入出栈",
+                "启动时把勾选的本机 IPv4 网段写入出栈，供其他节点访问。热点网段每次开启都可能变化，选择会同时记住接口类型。已排除本机 VPN（tun）。依赖 VNT 内置 NAT，不会把手机变成系统网关。未选过的旧配置默认公布热点，没有热点时公布 Wi‑Fi。",
+                config.optBoolean("advertise_wifi_subnet"));
+        List<WifiSubnet.LocalSubnet> detectedSubnets = new ArrayList<>(WifiSubnet.enumerate(this));
+        final List<List<WifiSubnet.Selection>> chosenSubnets = new ArrayList<>();
+        chosenSubnets.add(WifiSubnet.readSelections(config));
+        TextView subnetSummary = text(WifiSubnet.summary(chosenSubnets.get(0), detectedSubnets), 11, false, textMuted());
+        LinearLayout pickRow = row();
+        pickRow.setGravity(Gravity.CENTER_VERTICAL);
+        pickRow.setPadding(dp(12), dp(10), dp(12), dp(10));
+        pickRow.setBackground(round(bgInput(), 9, border(), 1));
+        pickRow.setClickable(true);
+        LinearLayout pickTexts = column();
+        pickTexts.addView(text("选择要公布的网段", 14, true, textStrong()));
+        pickTexts.addView(subnetSummary, top(3));
+        pickRow.addView(pickTexts, weighted());
+        pickRow.addView(text("›", 20, false, textMuted()));
+        pickRow.setOnClickListener(v -> showLocalSubnetDialog(detectedSubnets, chosenSubnets.get(0), next -> {
+            chosenSubnets.set(0, next);
+            detectedSubnets.clear();
+            detectedSubnets.addAll(WifiSubnet.enumerate(this));
+            subnetSummary.setText(WifiSubnet.summary(chosenSubnets.get(0), detectedSubnets));
+        }));
+        network.addView(pickRow, top(9));
         boolean rooted = RootAccess.isPresent();
         String rootHint = rooted
-                ? "检测到 su。开启后启动时会请求 root，启用内核转发与 iptables NAT，并关闭 VNT 内置 NAT。"
-                  + "这不会自动把同一 Wi‑Fi 上其他设备的默认网关改成手机。"
-                : "需要 root（Magisk/su）。当前设备未检测到 su，选项已置灰。无 root 请用「公布本机 Wi‑Fi 子网」。";
-        CheckBox systemWifiGateway = toggle(network, "系统级 Wi‑Fi 子网接管", "需 root：内核转发 + NAT",
+                ? "检测到 su。开启后启动时会请求 root，对上面选中的网段启用内核转发与 iptables NAT，并关闭 VNT 内置 NAT。"
+                  + "这不会自动把同一网段上其他设备的默认网关改成手机。"
+                : "需要 root（Magisk/su）。当前设备未检测到 su，选项已置灰。无 root 请用「公布本机子网」。";
+        CheckBox systemWifiGateway = toggle(network, "系统级 Wi‑Fi 子网接管", "需 root：对所选网段做内核转发 + NAT",
                 rootHint, rooted && config.optBoolean("system_wifi_gateway"), rooted);
         if (rooted) {
             systemWifiGateway.setOnCheckedChangeListener((button, checked) -> {
                 if (checked) advertiseWifiSubnet.setChecked(true);
             });
         }
-        notice(network,
-                detectedWifi == null
-                        ? "Wi‑Fi 子网出口：未检测到当前 Wi‑Fi；可先连上 Wi‑Fi 再开上面两项。"
-                        : ("Wi‑Fi 子网出口：已检测到 " + detectedWifi.value() + "。"),
-                INDIGO);
 
         LinearLayout transport = section(form, "传输优化", false);
         CheckBox rtx = toggle(transport, "QUIC 传输优化", "降低丢包，延迟可能有波动",
@@ -1073,7 +1084,7 @@ public final class MainActivity extends AppCompatActivity {
                     dnsServersSub.setText(s);
             }
         });
-        notice(subNetwork, "订阅模式只在本机保存 DNS；Wi‑Fi 子网公布请用手动配置。", INDIGO);
+        notice(subNetwork, "订阅模式只在本机保存 DNS；本机子网公布请用手动配置。", INDIGO);
         testSubscription.setOnClickListener(v -> {
             String value = subscription.getText().toString().trim();
             if (!value.startsWith("vnt2://join/2/")) { toast("订阅链接格式无效"); return; }
@@ -1170,7 +1181,8 @@ public final class MainActivity extends AppCompatActivity {
                         peerAddresses.joined(), turns.joined(), punchModels.joined(), outputRoutes.joined(), inputRoutes.joined(),
                         subnetMappings.joined(), autoSyncSubnet.isChecked(), advertiseWifiSubnet.isChecked(),
                         systemWifiGateway.isChecked(), certValue,
-                        tunnelPort.getText().toString(), portMappings.joined(), allowMapping.isChecked(), udpStuns.joined(), tcpStuns.joined());
+                        tunnelPort.getText().toString(), portMappings.joined(), allowMapping.isChecked(), udpStuns.joined(), tcpStuns.joined(),
+                        chosenSubnets.get(0));
                 if (existing != null) profile = profile.withId(existing.id);
                 store.save(profile.withDns(new VpnDnsSettings(
                         takeOverDns.isChecked(), dnsServers.getText().toString())));
@@ -1181,6 +1193,73 @@ public final class MainActivity extends AppCompatActivity {
         dialog.show();
         if (dialog.getWindow() != null) dialog.getWindow().setLayout(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT);
+    }
+
+    private void showLocalSubnetDialog(List<WifiSubnet.LocalSubnet> detected,
+                                        List<WifiSubnet.Selection> current,
+                                        java.util.function.Consumer<List<WifiSubnet.Selection>> onConfirm) {
+        List<WifiSubnet.LocalSubnet> rows = new ArrayList<>(detected);
+        List<String> checked = new ArrayList<>(WifiSubnet.checkedNames(current, rows));
+        LinearLayout list = column();
+        TextView hint = text("勾选要并入出栈的网段。每行是类型、接口名和当前 CIDR。热点换网段后仍按接口类型匹配。",
+                12, false, textMuted());
+        hint.setPadding(dp(2), 0, dp(2), dp(8));
+        ScrollView scroll = new ScrollView(this);
+        scroll.addView(list);
+        LinearLayout body = column();
+        body.setPadding(dp(18), dp(4), dp(18), dp(4));
+        body.addView(hint);
+        body.addView(scroll, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(280)));
+        Runnable rebuild = () -> {
+            list.removeAllViews();
+            if (rows.isEmpty()) {
+                list.addView(text("未发现可用的本机 IPv4 网段（已排除 tun 和未启用的接口）。",
+                        13, false, textMuted()));
+                return;
+            }
+            for (WifiSubnet.LocalSubnet subnet : rows) {
+                CheckBox box = new CheckBox(this);
+                box.setText(subnet.rowLabel());
+                box.setTextColor(textStrong());
+                box.setTextSize(13);
+                box.setChecked(checked.contains(subnet.name()));
+                box.setOnCheckedChangeListener((button, on) -> {
+                    if (on) {
+                        if (!checked.contains(subnet.name())) checked.add(subnet.name());
+                    } else {
+                        checked.remove(subnet.name());
+                    }
+                });
+                list.addView(box, top(2));
+            }
+        };
+        rebuild.run();
+        AlertDialog dialog = new AlertDialog.Builder(this)
+                .setTitle("选择要公布的网段")
+                .setView(body)
+                .setNegativeButton("取消", null)
+                .setNeutralButton("刷新", null)
+                .setPositiveButton("确定", null)
+                .create();
+        dialog.setOnShowListener(ignored -> {
+            dialog.getButton(AlertDialog.BUTTON_NEUTRAL).setOnClickListener(v -> {
+                rows.clear();
+                rows.addAll(WifiSubnet.enumerate(this));
+                detected.clear();
+                detected.addAll(rows);
+                rebuild.run();
+            });
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> {
+                List<WifiSubnet.Selection> next = new ArrayList<>();
+                for (WifiSubnet.LocalSubnet subnet : rows) {
+                    if (checked.contains(subnet.name())) next.add(subnet.selection());
+                }
+                onConfirm.accept(next);
+                dialog.dismiss();
+            });
+        });
+        dialog.show();
     }
 
     private void scanNetworkQr() {

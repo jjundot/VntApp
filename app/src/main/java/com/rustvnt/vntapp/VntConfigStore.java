@@ -117,7 +117,8 @@ final class VntConfigStore {
                                boolean autoSyncSubnet, boolean advertiseWifiSubnet,
                                boolean systemWifiGateway, String certMode,
                                String tunnelPort, String portMapping, boolean allowMapping,
-                               String udpStun, String tcpStun) throws Exception {
+                               String udpStun, String tcpStun,
+                               List<WifiSubnet.Selection> advertiseSubnets) throws Exception {
             validateBasicConfig(server, code, ip);
             validateMtu(mtu);
             JSONObject config = new JSONObject();
@@ -142,6 +143,7 @@ final class VntConfigStore {
             config.put("auto_sync_subnet", autoSyncSubnet);
             config.put("advertise_wifi_subnet", advertiseWifiSubnet || systemWifiGateway);
             config.put("system_wifi_gateway", systemWifiGateway);
+            WifiSubnet.writeSelections(config, advertiseSubnets);
             config.put("allow_mapping", allowMapping);
             config.put("cert_mode", certMode.trim().isEmpty() ? "skip" : certMode.trim());
             if (!tunnelPort.trim().isEmpty()) {
@@ -204,7 +206,7 @@ final class VntConfigStore {
             return create(code, String.join("\n", servers), code, password, deviceId, Build.MODEL,
                     "", mtu, false, false, false, false, false, allowIkev2, false,
                     "", "", "", "", "", "", false, false, false,
-                    "skip", "", "", false, "", "");
+                    "skip", "", "", false, "", "", null);
         }
 
         Profile withId(String existingId) { return new Profile(existingId, name, json, mode, subscription, dns); }

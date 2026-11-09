@@ -280,36 +280,43 @@ public final class VntVpnService extends VpnService {
     }
 
     /**
-     * 模式 1：无 root，公布 Wi‑Fi 子网 + 内置 NAT。
-     * 模式 2：system_wifi_gateway，要求 root，改用系统转发/NAT（no_nat）。
+     * 模式 1：无 root，把选中的本机网段并入出栈，走 VNT 内置 NAT。
+     * 模式 2：system_wifi_gateway，要求 root，对同一组网段做内核转发和 iptables NAT（no_nat）。
+     * 未保存过选择的旧配置：有热点用热点，否则用 Wi‑Fi 客户端。
      */
     private String applyWifiSubnetModes(String json) throws Exception {
         JSONObject config = new JSONObject(json);
         boolean systemGateway = config.optBoolean("system_wifi_gateway", false);
         boolean advertise = config.optBoolean("advertise_wifi_subnet", false) || systemGateway;
+        List<WifiSubnet.LocalSubnet> present = WifiSubnet.enumerate(this);
+        WifiSubnet.Resolution resolution = WifiSubnet.resolve(
+                WifiSubnet.readSelections(config), present, advertise);
+        for (String skipped : resolution.skipped()) {
+            Log.i("VNT", "跳过未出现的本机网段: " + skipped);
+        }
         if (systemGateway) {
             if (!RootAccess.canExecute()) {
                 throw new IllegalStateException(
-                        "系统级 Wi‑Fi 子网接管需要 root。请授予 su 权限，或改用「公布本机 Wi‑Fi 子网」。");
+                        "系统级 Wi‑Fi 子网接管需要 root。请授予 su 权限，或改用「公布本机子网」。");
             }
-            SystemWifiGateway.enable();
+            if (resolution.matched().isEmpty()) {
+                throw new IllegalStateException("未检测到已选本机网段，无法启用系统级接管");
+            }
+            SystemWifiGateway.enable(resolution.matched());
             config.put("no_nat", true);
             advertise = true;
         } else {
             SystemWifiGateway.disableQuietly();
             config.remove("no_nat");
         }
-        if (advertise) {
-            WifiSubnet.Cidr wifi = WifiSubnet.detect(this);
-            if (wifi != null) {
-                List<String> merged = WifiSubnet.mergeIntoOutput(
-                        arrayStrings(config.optJSONArray("output")), wifi);
-                JSONArray output = new JSONArray();
-                for (String value : merged) output.put(value);
-                config.put("output", output);
-            } else if (systemGateway) {
-                throw new IllegalStateException("未检测到 Wi‑Fi IPv4 子网，无法启用系统级接管");
-            }
+        if (advertise && !resolution.matched().isEmpty()) {
+            List<WifiSubnet.Cidr> cidrs = new ArrayList<>();
+            for (WifiSubnet.LocalSubnet subnet : resolution.matched()) cidrs.add(subnet.cidr());
+            List<String> merged = WifiSubnet.mergeIntoOutput(
+                    arrayStrings(config.optJSONArray("output")), cidrs);
+            JSONArray output = new JSONArray();
+            for (String value : merged) output.put(value);
+            config.put("output", output);
         }
         return config.toString();
     }
