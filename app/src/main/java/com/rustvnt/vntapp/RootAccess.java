@@ -1,6 +1,8 @@
 package com.rustvnt.vntapp;
 
+import java.io.ByteArrayOutputStream;
 import java.io.File;
+import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.concurrent.TimeUnit;
@@ -38,12 +40,11 @@ final class RootAccess {
         if (!isPresent()) return false;
         try {
             Process process = new ProcessBuilder("su", "-c", "id").redirectErrorStream(true).start();
-            boolean finished = process.waitFor(8, TimeUnit.SECONDS);
-            if (!finished) {
-                process.destroyForcibly();
+            if (!waitForExit(process, 8_000)) {
+                process.destroy();
                 return false;
             }
-            String out = new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
+            String out = readUtf8(process.getInputStream());
             return process.exitValue() == 0 && out.contains("uid=0");
         } catch (Exception ignored) {
             return false;
@@ -52,15 +53,11 @@ final class RootAccess {
 
     static String runSu(String command) throws Exception {
         Process process = new ProcessBuilder("su", "-c", command).redirectErrorStream(true).start();
-        boolean finished = process.waitFor(15, TimeUnit.SECONDS);
-        String out;
-        try (InputStream in = process.getInputStream()) {
-            out = new String(in.readAllBytes(), StandardCharsets.UTF_8);
-        }
-        if (!finished) {
-            process.destroyForcibly();
+        if (!waitForExit(process, 15_000)) {
+            process.destroy();
             throw new IllegalStateException("su 命令超时");
         }
+        String out = readUtf8(process.getInputStream());
         if (process.exitValue() != 0) {
             throw new IllegalStateException(out.isBlank() ? ("su 失败，退出码 " + process.exitValue()) : out.trim());
         }
@@ -70,14 +67,40 @@ final class RootAccess {
     private static String whichSu() {
         try {
             Process process = new ProcessBuilder("sh", "-c", "command -v su").redirectErrorStream(true).start();
-            if (!process.waitFor(3, TimeUnit.SECONDS)) {
-                process.destroyForcibly();
+            if (!waitForExit(process, 3_000)) {
+                process.destroy();
                 return null;
             }
-            String out = new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8).trim();
+            String out = readUtf8(process.getInputStream()).trim();
             return process.exitValue() == 0 && !out.isEmpty() ? out : null;
         } catch (Exception ignored) {
             return null;
         }
+    }
+
+    /** {@link Process#waitFor(long, TimeUnit)} is API 26; minSdk is 24. */
+    private static boolean waitForExit(Process process, long timeoutMs) throws InterruptedException {
+        long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMs);
+        while (true) {
+            try {
+                process.exitValue();
+                return true;
+            } catch (IllegalThreadStateException stillRunning) {
+                long remainingMs = TimeUnit.NANOSECONDS.toMillis(deadline - System.nanoTime());
+                if (remainingMs <= 0) return false;
+                Thread.sleep(Math.min(50L, remainingMs));
+            }
+        }
+    }
+
+    /** {@link InputStream#readAllBytes()} is API 33. */
+    private static String readUtf8(InputStream in) throws IOException {
+        ByteArrayOutputStream buffer = new ByteArrayOutputStream();
+        byte[] chunk = new byte[4096];
+        try (InputStream source = in) {
+            int count;
+            while ((count = source.read(chunk)) != -1) buffer.write(chunk, 0, count);
+        }
+        return new String(buffer.toByteArray(), StandardCharsets.UTF_8);
     }
 }
