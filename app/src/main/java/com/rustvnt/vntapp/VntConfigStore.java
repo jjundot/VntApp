@@ -203,7 +203,7 @@ final class VntConfigStore {
                                     boolean allowIkev2, String deviceId) throws Exception {
             return create(code, String.join("\n", servers), code, password, deviceId, Build.MODEL,
                     "", mtu, false, false, false, false, false, allowIkev2, false,
-                    "", "", "", "", "", "", false,
+                    "", "", "", "", "", "", false, false, false,
                     "skip", "", "", false, "", "");
         }
 

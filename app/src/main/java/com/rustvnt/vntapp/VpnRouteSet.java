@@ -69,7 +69,7 @@ final class VpnRouteSet {
     }
 
     private static int parseIpv4(String address, String original) {
-        String[] octets = address.split("\.", -1);
+        String[] octets = address.split("\\.", -1);
         if (octets.length != 4) throw new IllegalArgumentException("无效 IPv4 路由：" + original);
         int value = 0;
         for (String octet : octets) {
