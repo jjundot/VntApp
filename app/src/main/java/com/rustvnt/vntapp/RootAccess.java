@@ -4,6 +4,7 @@ import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.concurrent.TimeUnit;
 
@@ -53,7 +54,25 @@ final class RootAccess {
 
     static String runSu(String command) throws Exception {
         Process process = new ProcessBuilder("su", "-c", command).redirectErrorStream(true).start();
-        if (!waitForExit(process, 15_000)) {
+        return awaitSu(process, 15_000);
+    }
+
+    /**
+     * 把脚本交给 {@code su -c sh -s} 的标准输入。部分 su 只执行 {@code -c} 的第一行，
+     * 多行规则必须从 stdin 喂给 shell。
+     */
+    static String runSuScript(String script) throws Exception {
+        byte[] body = script.endsWith("\n") ? script.getBytes(StandardCharsets.UTF_8)
+                : (script + "\n").getBytes(StandardCharsets.UTF_8);
+        Process process = new ProcessBuilder("su", "-c", "sh -s").redirectErrorStream(true).start();
+        try (OutputStream stdin = process.getOutputStream()) {
+            stdin.write(body);
+        }
+        return awaitSu(process, 20_000);
+    }
+
+    private static String awaitSu(Process process, long timeoutMs) throws Exception {
+        if (!waitForExit(process, timeoutMs)) {
             process.destroy();
             throw new IllegalStateException("su 命令超时");
         }

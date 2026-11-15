@@ -38,6 +38,10 @@ public class WifiSubnetTest {
         assertEquals(WifiSubnet.Kind.HOTSPOT, WifiSubnet.classify("swlan0", null));
         assertEquals(WifiSubnet.Kind.HOTSPOT, WifiSubnet.classify("wlan1", null));
         assertEquals(WifiSubnet.Kind.HOTSPOT, WifiSubnet.classify("softap0", null));
+        assertEquals(WifiSubnet.Kind.HOTSPOT, WifiSubnet.classify("br0", null));
+        assertEquals(WifiSubnet.Kind.HOTSPOT, WifiSubnet.classify("tether0", null));
+        assertEquals(WifiSubnet.Kind.HOTSPOT, WifiSubnet.classify("bridge0", null));
+        assertEquals(WifiSubnet.Kind.HOTSPOT, WifiSubnet.classify("ap_wlan0", null));
         assertEquals(WifiSubnet.Kind.HOTSPOT, WifiSubnet.classify("wlan0", WifiSubnet.Kind.HOTSPOT));
         assertEquals(WifiSubnet.Kind.WIFI, WifiSubnet.classify("wlan0", null));
         assertEquals(WifiSubnet.Kind.WIFI, WifiSubnet.classify("wifi0", null));

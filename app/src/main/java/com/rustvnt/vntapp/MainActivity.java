@@ -942,10 +942,9 @@ public final class MainActivity extends AppCompatActivity {
         network.addView(pickRow, top(9));
         boolean rooted = RootAccess.isPresent();
         String rootHint = rooted
-                ? "检测到 su。开启后启动时会请求 root，对上面选中的网段启用内核转发与 iptables NAT，并关闭 VNT 内置 NAT。"
-                  + "这不会自动把同一网段上其他设备的默认网关改成手机。"
+                ? "检测到 su。热点客户端只走与本机 VPN 相同的路由（虚拟网段、入栈和已同步网段）。入栈里有 0.0.0.0/0 时，热点的默认流量才进隧道，其余仍走系统共享。"
                 : "需要 root（Magisk/su）。当前设备未检测到 su，选项已置灰。无 root 请用「公布本机子网」。";
-        CheckBox systemWifiGateway = toggle(network, "系统级 Wi‑Fi 子网接管", "需 root：对所选网段做内核转发 + NAT",
+        CheckBox systemWifiGateway = toggle(network, "系统级 Wi‑Fi 子网接管", "需 root：热点流量跟随 VPN 路由",
                 rootHint, rooted && config.optBoolean("system_wifi_gateway"), rooted);
         if (rooted) {
             systemWifiGateway.setOnCheckedChangeListener((button, checked) -> {

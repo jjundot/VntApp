@@ -228,6 +228,31 @@ final class WifiSubnet {
         return name != null && name.toLowerCase(Locale.ROOT).startsWith("tun");
     }
 
+    /** 本进程 VPN 的 tun 名：优先地址等于虚拟 IP 的接口。 */
+    static String findOwnTun(String virtualIp) {
+        Enumeration<NetworkInterface> interfaces = safeInterfaces();
+        if (interfaces == null) return null;
+        String fallback = null;
+        while (interfaces.hasMoreElements()) {
+            NetworkInterface nif = interfaces.nextElement();
+            String name = nif.getName();
+            if (!isTun(name)) continue;
+            try {
+                if (!nif.isUp()) continue;
+            } catch (SocketException error) {
+                continue;
+            }
+            if (fallback == null) fallback = name;
+            if (virtualIp == null || virtualIp.isBlank()) continue;
+            for (InterfaceAddress binding : nif.getInterfaceAddresses()) {
+                InetAddress address = binding.getAddress();
+                if (!(address instanceof Inet4Address)) continue;
+                if (virtualIp.equals(address.getHostAddress())) return name;
+            }
+        }
+        return fallback;
+    }
+
     private static List<LocalSubnet> enumerateInterfaces(Enumeration<NetworkInterface> interfaces,
                                                          Map<String, Kind> hints) {
         List<LocalSubnet> result = new ArrayList<>();
@@ -309,6 +334,7 @@ final class WifiSubnet {
     }
 
     private static boolean isHotspotName(String name) {
+        if (name.equals("br0") || name.startsWith("tether") || name.startsWith("bridge")) return true;
         if (name.startsWith("ap") || name.startsWith("softap") || name.startsWith("swlan")) return true;
         if (name.contains("softap")) return true;
         if (!name.startsWith("wlan")) return false;

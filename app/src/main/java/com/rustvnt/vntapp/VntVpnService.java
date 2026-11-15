@@ -4,8 +4,10 @@ import android.app.Notification;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.app.PendingIntent;
+import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
+import android.content.IntentFilter;
 import android.content.SharedPreferences;
 import android.net.VpnService;
 import android.os.Build;
@@ -66,6 +68,18 @@ public final class VntVpnService extends VpnService {
     private String activeIp;
     private int activePrefixLen;
     private List<String> activeSubnetRoutes = Collections.emptyList();
+    /** 系统级热点接管：表 201 与当前 VpnRouteSet 保持一致。 */
+    private volatile boolean systemGatewayEnabled;
+    private volatile List<String> gatewayTunCidrs = Collections.emptyList();
+    private String gatewayFingerprint;
+    private ScheduledFuture<?> gatewayWatch;
+    private boolean tetherWatcherRegistered;
+    private final BroadcastReceiver tetherWatcher = new BroadcastReceiver() {
+        @Override public void onReceive(Context context, Intent intent) {
+            if (worker == null || worker.isShutdown()) return;
+            worker.execute(() -> installSystemGateway());
+        }
+    };
     private final Map<String, VntApi.Traffic> trafficSamples = new HashMap<>();
     private long trafficSampleTime;
     private volatile boolean cancellationRequested;
@@ -267,6 +281,12 @@ public final class VntVpnService extends VpnService {
             int tunFd = established.detachFd();
             created.startTun(tunFd);
             tunActive = true;
+            if (systemGatewayEnabled) {
+                installSystemGateway();
+                startGatewayWatch();
+            }
+        } else if (systemGatewayEnabled) {
+            Log.w("VNT", "无虚拟网卡模式不能把热点流量送入 VNT");
         }
 
         api = created.getApi();
@@ -294,15 +314,15 @@ public final class VntVpnService extends VpnService {
         for (String skipped : resolution.skipped()) {
             Log.i("VNT", "跳过未出现的本机网段: " + skipped);
         }
+        systemGatewayEnabled = systemGateway;
         if (systemGateway) {
             if (!RootAccess.canExecute()) {
                 throw new IllegalStateException(
                         "系统级 Wi‑Fi 子网接管需要 root。请授予 su 权限，或改用「公布本机子网」。");
             }
             if (resolution.matched().isEmpty()) {
-                throw new IllegalStateException("未检测到已选本机网段，无法启用系统级接管");
+                Log.i("VNT", "系统级接管：热点接口尚未出现，等热点开启后再安装策略路由");
             }
-            SystemWifiGateway.enable(resolution.matched());
             config.put("no_nat", true);
             advertise = true;
         } else {
@@ -383,6 +403,7 @@ public final class VntVpnService extends VpnService {
                 ChangeApplyResult result = expectedNetwork.applyRuntimeChange(fd);
                 if (result.isApplied()) {
                     commitRuntimeChangeApplied(cidr);
+                    if (systemGatewayEnabled) installSystemGateway();
                     return true;
                 }
                 handleRuntimeLoopExit("携带新接口后仍未应用：" + result);
@@ -406,6 +427,7 @@ public final class VntVpnService extends VpnService {
                 ChangeApplyResult retry = expectedNetwork.applyRuntimeChange(fd);
                 if (retry.isApplied()) {
                     commitRuntimeChangeApplied(cidr);
+                    if (systemGatewayEnabled) installSystemGateway();
                     return true;
                 }
                 handleRuntimeLoopExit("携带新接口后仍未应用：" + retry);
@@ -495,8 +517,10 @@ public final class VntVpnService extends VpnService {
                 .addAddress(ip, prefixLen);
         builder.addDisallowedApplication(getPackageName());
         // 出栈网段只交给 Rust 核心公布/NAT，不写入 Android VpnService 路由表
-        for (VpnRouteSet.Route route : VpnRouteSet.build(ip, prefixLen,
-                arrayStrings(config.optJSONArray("input")), activeSubnetRoutes)) {
+        List<VpnRouteSet.Route> vpnRoutes = VpnRouteSet.build(ip, prefixLen,
+                arrayStrings(config.optJSONArray("input")), activeSubnetRoutes);
+        rememberTunRoutes(vpnRoutes);
+        for (VpnRouteSet.Route route : vpnRoutes) {
             addRoute(builder, route.address(), route.prefix());
         }
         configureDns(builder);
@@ -516,7 +540,9 @@ public final class VntVpnService extends VpnService {
                 .setMtu(clampMtu(mtu))
                 .addAddress(ip, prefixLen);
         builder.addDisallowedApplication(getPackageName());
-        for (VpnRouteSet.Route route : VpnRouteSet.rebuild(ip, prefixLen, routes)) {
+        List<VpnRouteSet.Route> vpnRoutes = VpnRouteSet.rebuild(ip, prefixLen, routes);
+        rememberTunRoutes(vpnRoutes);
+        for (VpnRouteSet.Route route : vpnRoutes) {
             addRoute(builder, route.address(), route.prefix());
         }
         configureDns(builder);
@@ -615,6 +641,92 @@ public final class VntVpnService extends VpnService {
         trafficSampleTime = 0;
     }
 
+    private void rememberTunRoutes(List<VpnRouteSet.Route> routes) {
+        List<String> cidrs = new ArrayList<>();
+        for (VpnRouteSet.Route route : routes) cidrs.add(route.cidr());
+        gatewayTunCidrs = cidrs;
+    }
+
+    /**
+     * tun 起来之后才知道接口名。表 201 只复制 VpnRouteSet；没有 0.0.0.0/0 就不加 default。
+     * 热点网段从热点接口走，避免把局域网自己吸进隧道。
+     */
+    private synchronized void installSystemGateway() {
+        if (!systemGatewayEnabled || !tunActive) return;
+        try {
+            String tun = WifiSubnet.findOwnTun(activeIp);
+            if (tun == null) {
+                Log.w("VNT", "系统级接管：未找到虚拟网卡 tun");
+                return;
+            }
+            JSONObject config = activeConfigJson == null || activeConfigJson.isBlank()
+                    ? new JSONObject() : new JSONObject(activeConfigJson);
+            List<WifiSubnet.LocalSubnet> hotspots = new ArrayList<>();
+            for (WifiSubnet.LocalSubnet subnet : WifiSubnet.resolve(
+                    WifiSubnet.readSelections(config), WifiSubnet.enumerate(this), true).matched()) {
+                if (subnet.kind() == WifiSubnet.Kind.HOTSPOT) hotspots.add(subnet);
+            }
+            List<String> tunCidrs = gatewayTunCidrs;
+            String dns = null;
+            try {
+                dns = SystemWifiGateway.coveredDns(activeDns.servers(), tunCidrs);
+            } catch (RuntimeException error) {
+                Log.w("VNT", "热点 DNS 未改写：" + error.getMessage());
+            }
+            String fingerprint = tun + "\n" + tunCidrs + "\n" + hotspots + "\n" + dns;
+            if (fingerprint.equals(gatewayFingerprint)) return;
+            if (dns == null && activeDns.enabled && !hotspots.isEmpty()) {
+                Log.i("VNT", "热点 DNS 未改写：VPN DNS 不在表 201 的路由里，仍由系统共享解析");
+            }
+            if (hotspots.isEmpty()) {
+                Log.i("VNT", "系统级接管：当前没有热点接口，清除策略路由");
+                SystemWifiGateway.disableQuietly();
+                gatewayFingerprint = fingerprint;
+                return;
+            }
+            SystemWifiGateway.apply(tun, hotspots, tunCidrs, dns);
+            gatewayFingerprint = fingerprint;
+        } catch (Exception error) {
+            Log.w("VNT", "安装热点策略路由失败: " + error.getMessage());
+        }
+    }
+
+    private void startGatewayWatch() {
+        if (!tetherWatcherRegistered) {
+            IntentFilter filter = new IntentFilter("android.net.conn.TETHER_STATE_CHANGED");
+            if (Build.VERSION.SDK_INT >= 33) {
+                registerReceiver(tetherWatcher, filter, Context.RECEIVER_NOT_EXPORTED);
+            } else {
+                registerReceiver(tetherWatcher, filter);
+            }
+            tetherWatcherRegistered = true;
+        }
+        if (gatewayWatch == null || gatewayWatch.isCancelled() || gatewayWatch.isDone()) {
+            gatewayWatch = worker.scheduleWithFixedDelay(() -> {
+                try {
+                    installSystemGateway();
+                } catch (Throwable error) {
+                    Log.w("VNT", "刷新热点接口失败: " + error.getMessage());
+                }
+            }, 3, 3, TimeUnit.SECONDS);
+        }
+    }
+
+    private void stopGatewayWatch() {
+        if (gatewayWatch != null) {
+            gatewayWatch.cancel(false);
+            gatewayWatch = null;
+        }
+        if (tetherWatcherRegistered) {
+            try {
+                unregisterReceiver(tetherWatcher);
+            } catch (RuntimeException ignored) {
+            }
+            tetherWatcherRegistered = false;
+        }
+        gatewayFingerprint = null;
+    }
+
     private void shutdown() {
         cleanupNative();
         clearActiveConnection();
@@ -624,6 +736,11 @@ public final class VntVpnService extends VpnService {
     }
 
     private void cleanupNative() {
+        stopGatewayWatch();
+        systemGatewayEnabled = false;
+        gatewayFingerprint = null;
+        gatewayTunCidrs = Collections.emptyList();
+        SystemWifiGateway.disableQuietly();
         stopCurrentInstance();
         try { VntManager.destroy(); } catch (Throwable ignored) { }
         activeProfileId = null;
